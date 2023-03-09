@@ -1,9 +1,6 @@
-import json
-import re
 from loguru import logger
 
 import requests
-from bs4 import BeautifulSoup
 
 
 class Qndxx:
@@ -11,65 +8,60 @@ class Qndxx:
         # 需要传入的laravel_session
         self.laravel_session = laravel_session
         # 请求头
-        self.UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 15_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.18(0x18001234) NetType/WIFI Language/zh_CN"
+        self.UA = "Mozilla/5.0 (Linux; Android 13; 22127RK46C Build/TKQ1.220905.001; wv) AppleWebKit/537.36 (KHTML, " \
+                  "like Gecko) Version/4.0 Chrome/107.0.5304.141 Mobile Safari/537.36 XWEB/5015 MMWEBSDK/20230202 " \
+                  "MMWEBID/3840 MicroMessenger/8.0.33.2320(0x2800213D) WeChat/arm64 Weixin NetType/WIFI " \
+                  "Language/zh_CN ABI/arm64"
+        # 江苏省青年大学习成绩单接口
+        self.cjdListUrl = "https://service.jiangsugqt.org/api/cjdList"
         # 江苏省青年大学习接口
-        self.loginurl = "https://service.jiangsugqt.org/youth/lesson"
-        # 确认信息接口
-        self.confirmurl = "https://service.jiangsugqt.org/youth/lesson/confirm"
+        self.doLessonUrl = "https://service.jiangsugqt.org/api/doLesson"
         # 创建会话
-        self.session = requests.session()  # 创建会话
-        # 构建用户信息字典
-        self.userinfo = {}
+        self.session = requests.session()
+        # 是否已经学习
+        self.has_learn = ""
+        # 课程id
+        self.lesson_id = ""
 
-    def get_userinfo(self, userinfo):
-        for i in userinfo:
-            # 解析课程姓名编号单位信息
-            info_soup = BeautifulSoup(str(i), 'html.parser')
-            item = info_soup.get_text()  # 用户信息
-            self.userinfo[item[:4]] = item[5:]
-
-    def confirm(self):
+    def do_qndxx(self):
+        # 参数
         params = {
-            "_token": self.userinfo.get('token'),
-            "lesson_id": self.userinfo.get('lesson_id')
+            "lesson_id": self.lesson_id
         }
-        confirm_res = self.session.post(url=self.confirmurl, params=params)
-        res = json.loads(confirm_res.text)
-        logger.info(f"返回结果:{res}")
+
+        res = self.session.post(url=self.doLessonUrl, params=params)
+        res = res.json()
+
         if res["status"] == 1 and res["message"] == "操作成功":
             logger.info("青年大学习已完成")
-            logger.info(f"您的信息:{self.userinfo}")
         else:
             raise Exception(f"确认时出现错误:{res['message']}")
 
-    def login(self):
+    def get_latest_data(self):
         # 参数
         params = {
-            "s": "/youth/lesson",
-            "form": "inglemessage",
-            "isappinstalled": "0"
+            "page": "1",
+            "limit": "20"
         }
         # 构造请求头
         headers = {
             'User-Agent': self.UA,
-            'Cookie': "laravel_session=" + self.laravel_session  # 抓包获取
+            'Cookie': "laravel_session=" + self.laravel_session
         }
-        # 登录
-        login_res = self.session.get(url=self.loginurl, headers=headers, params=params)
+        # 获取成绩单
+        res = self.session.post(url=self.cjdListUrl, headers=headers, params=params)
+        res = res.json()
 
-        if '抱歉，出错了' in login_res.text:
+        if not (res["status"] == 1 and res["message"] == "操作成功"):
             raise Exception("laravel_session错误")
-        # 正则匹配token和lesson_id
-        token = re.findall(r'var token ?= ?"(.*?)"', login_res.text)  # 获取js里的token
-        lesson_id = re.findall(r"'lesson_id':(.*)", login_res.text)  # 获取js里的token
 
-        self.userinfo['token'] = token[0]
-        self.userinfo['lesson_id'] = lesson_id[0]
-        # 解析信息确认页面
-        login_soup = BeautifulSoup(login_res.text, 'html.parser')
-        # 找到用户信息div 课程姓名编号单位
-        userinfo = login_soup.select(".confirm-user-info p")
-        self.get_userinfo(userinfo)
+        self.has_learn = res["data"][0]["has_learn"]
+        self.lesson_id = res["data"][0]["id"]
 
-
-
+    def start(self):
+        # 获取最新的一次课程
+        self.get_latest_data()
+        if self.has_learn == '1':
+            logger.info("已完成过青年大学习")
+            return
+        self.do_qndxx()
